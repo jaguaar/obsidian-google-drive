@@ -21,6 +21,8 @@ interface PluginSettings {
 	driveIdToPath: Record<string, string>;
 	lastSyncedAt: number;
 	changesToken: string;
+	autoPush: boolean;
+	autoPushDelaySeconds: number;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -29,6 +31,8 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	driveIdToPath: {},
 	lastSyncedAt: 0,
 	changesToken: "",
+	autoPush: false,
+	autoPushDelaySeconds: 5,
 };
 
 export default class ObsidianGoogleDrive extends Plugin {
@@ -40,6 +44,7 @@ export default class ObsidianGoogleDrive extends Plugin {
 	drive = getDriveClient(this);
 	ribbonIcon: HTMLElement;
 	syncing: boolean;
+	private autoPushTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async onload() {
 		const { vault } = this.app;
@@ -178,6 +183,18 @@ export default class ObsidianGoogleDrive extends Plugin {
 		}
 		this.settings.operations[file.path] = "modify";
 		this.debouncedSaveSettings();
+		this.scheduleAutoPush();
+	}
+
+	private scheduleAutoPush() {
+		if (!this.settings.autoPush) return;
+		if (this.autoPushTimer) clearTimeout(this.autoPushTimer);
+		this.autoPushTimer = setTimeout(() => {
+			this.autoPushTimer = null;
+			if (!this.syncing && Object.keys(this.settings.operations).length) {
+				push(this, true);
+			}
+		}, this.settings.autoPushDelaySeconds * 1000);
 	}
 
 	handleRename(file: TAbstractFile, oldPath: string) {
@@ -374,5 +391,35 @@ class SettingsTab extends PluginSettingTab {
 						);
 					});
 			});
+
+		new Setting(containerEl)
+			.setName("Auto-push on save")
+			.setDesc("Automatically push changes to Google Drive after each file save.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoPush)
+					.onChange(async (value) => {
+						this.plugin.settings.autoPush = value;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.autoPush) {
+			new Setting(containerEl)
+				.setName("Push delay (seconds)")
+				.setDesc("How long to wait after the last file save before pushing.")
+				.addText((text) =>
+					text
+						.setValue(String(this.plugin.settings.autoPushDelaySeconds))
+						.onChange(async (value) => {
+							const num = parseInt(value);
+							if (!isNaN(num) && num > 0) {
+								this.plugin.settings.autoPushDelaySeconds = num;
+								await this.plugin.saveSettings();
+							}
+						})
+				);
+		}
 	}
 }
